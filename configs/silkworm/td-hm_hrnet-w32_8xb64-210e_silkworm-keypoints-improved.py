@@ -4,7 +4,7 @@ _base_ = [
 ]
 
 # -------------------------------------------------
-# Dataset Configuration - Updated for Keypoint Training
+# Dataset Configuration - Improved Keypoint Training
 # -------------------------------------------------
 dataset_type = 'CocoDataset'
 data_mode = 'topdown'
@@ -20,9 +20,9 @@ train_pipeline = [
     dict(type='GetBBoxCenterScale', padding=1.25),
     dict(type='RandomFlip', prob=0.5, direction='horizontal'),
     dict(type='RandomBBoxTransform',
-         scale_factor=[0.7, 1.3], rotate_factor=40),
+         scale_factor=[0.6, 1.4], rotate_factor=60),  # More augmentation
     dict(type='TopdownAffine', input_size=image_size),
-    dict(type='GenerateTarget',
+    dict(type='GenerateTarget', 
          encoder=dict(
              type='MSRAHeatmap',
              input_size=image_size,
@@ -49,7 +49,7 @@ _common_cfg = dict(
 
 # Data loaders
 train_dataloader = dict(
-    batch_size=64,
+    batch_size=32,  # Increased batch size
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
@@ -60,7 +60,7 @@ train_dataloader = dict(
 )
 
 val_dataloader = dict(
-    batch_size=64,
+    batch_size=32,
     num_workers=4,
     persistent_workers=True,
     drop_last=False,
@@ -84,26 +84,39 @@ model = dict(
     type='TopdownPoseEstimator',
     data_preprocessor=dict(
         type='PoseDataPreprocessor',
-        mean=[128, 128, 128],
-        std=[256, 256, 256],
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True),
-
     backbone=dict(
         type='HRNet',
         in_channels=3,
         extra=dict(
-            stage1=dict(num_modules=1, num_branches=1, block='BOTTLENECK',
-                        num_blocks=(4,), num_channels=(64,)),
-            stage2=dict(num_modules=1, num_branches=2, block='BASIC',
-                        num_blocks=(4, 4), num_channels=(32, 64)),
-            stage3=dict(num_modules=4, num_branches=3, block='BASIC',
-                        num_blocks=(4, 4, 4), num_channels=(32, 64, 128)),
-            stage4=dict(num_modules=3, num_branches=4, block='BASIC',
-                        num_blocks=(4, 4, 4, 4),
-                        num_channels=(32, 64, 128, 256))),
+            stage1=dict(
+                num_modules=1,
+                num_branches=1,
+                block='BOTTLENECK',
+                num_blocks=(4, ),
+                num_channels=(64, )),
+            stage2=dict(
+                num_modules=1,
+                num_branches=2,
+                block='BASIC',
+                num_blocks=(4, 4),
+                num_channels=(32, 64)),
+            stage3=dict(
+                num_modules=4,
+                num_branches=3,
+                block='BASIC',
+                num_blocks=(4, 4, 4),
+                num_channels=(32, 64, 128)),
+            stage4=dict(
+                num_modules=3,
+                num_branches=4,
+                block='BASIC',
+                num_blocks=(4, 4, 4, 4),
+                num_channels=(32, 64, 128, 256))),
         
     ),
-
     head = dict(
         type='HeatmapHead',
         in_channels=32,              # HRNet の出力チャネル
@@ -117,31 +130,48 @@ model = dict(
             heatmap_size=[48, 64],
             sigma=2)  
     ),
+    test_cfg=dict(
+        flip_test=True,
+        flip_mode='heatmap',
+        shift_heatmap=True,
+    ))
 
-    test_cfg=dict(flip_test=False)      # 左右対称ペアが無いので False
-)
-
-load_from = '/home/atmiyashita/python/openmmlab/data/silkworm/pretrain/td-hm_hrnet-w32_8xb64-210e_coco-256x192-81c58e40_20220909.pth'
 # -------------------------------------------------
-# Optimizer & Schedule
+# Training Configuration
 # -------------------------------------------------
-train_cfg = dict(max_epochs=210, val_interval=5)
 
-optim_wrapper = dict(
-    optimizer=dict(type='Adam', lr=5e-4, weight_decay=0)
-)
+# optimizer
+optim_wrapper = dict(optimizer=dict(
+    type='Adam',
+    lr=5e-4,  # Lower learning rate for fine-tuning
+))
 
+# learning policy
 param_scheduler = [
-    # warm-up 500 iters
-    dict(type='LinearLR', start_factor=1e-5,
-         by_epoch=False, begin=0, end=500),
-    # step decay
-    dict(type='MultiStepLR',
-         by_epoch=True, begin=0, end=210,
-         milestones=[170, 200], gamma=0.1),
+    dict(
+        type='LinearLR', begin=0, end=500, start_factor=0.001,
+        by_epoch=False),  # warm-up
+    dict(
+        type='MultiStepLR',
+        begin=0,
+        end=300,  # Increased epochs
+        milestones=[200, 250],
+        gamma=0.1,
+        by_epoch=True)
 ]
 
-# -------------------------------------------------
-# Work-Dir (コマンドライン --work-dir でも可)
-# -------------------------------------------------
-work_dir = 'work_dirs/hrnet_silkworm11'
+# training cfg
+train_cfg = dict(max_epochs=300, val_interval=10)
+val_cfg = dict()
+test_cfg = dict()
+
+# hooks
+default_hooks = dict(
+    checkpoint=dict(save_best='coco/AP', rule='greater', max_keep_ckpts=3))
+
+# codec settings
+codec = dict(
+    type='MSRAHeatmap', input_size=(192, 256), heatmap_size=(48, 64), sigma=2)
+
+# Load from your existing checkpoint for fine-tuning
+load_from = '/home/atmiyashita/python/openmmlab/data/silkworm/pretrain/td-hm_hrnet-w32_8xb64-210e_coco-256x192-81c58e40_20220909.pth'
